@@ -21,22 +21,29 @@ namespace ArticWebServer.Services
         // Šalje zahtev ka Art Institute of Chicago API-ju
         // q      - tekst za pretragu (full-text ili autor)
         // author - ako je true, pretraga se vrši po polju artist_display
-        public string Search(string q, bool author = false)
+        public string Search(string q, bool author = false, int limit = 10, int delayMs = 0)
         {
+            if (delayMs > 0)
+            {
+                Logger.Log($"[DEMO] Vestacko kasnjenje {delayMs}ms pre dohvatanja (za stampede test)");
+                System.Threading.Thread.Sleep(delayMs);
+            }
+
+            string fields = "id,title,artist_display,date_display,medium_display,place_of_origin";
             string url;
 
             if (author)
             {
-                // Pretraga po autoru koristeći fields i query parametre
                 url = $"{_baseUrl}?q={Uri.EscapeDataString(q)}" +
                       $"&query[match][artist_display]={Uri.EscapeDataString(q)}" +
-                      $"&fields=id,title,artist_display,date_display,medium_display,place_of_origin";
+                      $"&fields={fields}" +
+                      $"&limit={limit}";
             }
             else
             {
-                // Full-text pretraga
                 url = $"{_baseUrl}?q={Uri.EscapeDataString(q)}" +
-                      $"&fields=id,title,artist_display,date_display,medium_display,place_of_origin";
+                      $"&fields={fields}" +
+                      $"&limit={limit}";
             }
 
             Logger.Log($"Slanje zahteva ka ARTIC API-ju: {url}");

@@ -158,6 +158,10 @@ namespace ArticWebServer.Server
             {
                 HandleSearchRequest(context);
             }
+            else if (path == "/stamp-test")                  
+            {
+                SendStampTestPage(context);                   
+            }
             else if (path == "/")
             {
                 SendHomeResponse(context);
@@ -183,8 +187,33 @@ namespace ArticWebServer.Server
                 return;
             }
 
-            // Ključ keša uključuje tip pretrage (full-text vs autor)
-            string cacheKey = isAuthorSearch ? $"author:{q}" : $"fulltext:{q}";
+            // Opcioni parametar 'limit' - koliko rezultata vratiti. Default 10.
+            int limit = 10;
+            string? limitParam = queryParams["limit"];
+            if (!string.IsNullOrWhiteSpace(limitParam))
+            {
+                if (int.TryParse(limitParam, out int parsedLimit))
+                {
+                    limit = Math.Clamp(parsedLimit, 1, 100);
+                }
+                else
+                {
+                    SendHtmlResponse(context, 400,
+                        ArticSearchService.BuildErrorHtml($"Parametar 'limit' mora biti broj. Dobijeno: <b>{limitParam}</b>"));
+                    return;
+                }
+            }
+
+            // Opcioni 'delay' (ms) - SAMO za demonstraciju stampede. Default 0.
+            int delayMs = 0;
+            string? delayParam = queryParams["delay"];
+            if (!string.IsNullOrWhiteSpace(delayParam) && int.TryParse(delayParam, out int parsedDelay))
+            {
+                delayMs = Math.Clamp(parsedDelay, 0, 10000);
+            }
+
+            // Keš ključ mora da uključi i limit - različit limit = različit rezultat.
+            string cacheKey = isAuthorSearch ? $"author:{q}:{limit}" : $"fulltext:{q}:{limit}";
             Logger.Log($"Upit za pretragu: '{q}', tip: {(isAuthorSearch ? "autor" : "full-text")}, kes ključ: '{cacheKey}'");
 
             string? cachedResult = null;
@@ -208,7 +237,7 @@ namespace ArticWebServer.Server
 
                 // Keš promašaj - pozivamo API
                 Logger.Log($"Dohvatanje podataka za '{q}' sa ARTIC API-ja...");
-                string jsonResult = _searchService.Search(q, isAuthorSearch);
+                string jsonResult = _searchService.Search(q, isAuthorSearch, limit, delayMs);
                 fetchedFromApi = true;
 
                 // Proveravamo da li su pronađeni rezultati
@@ -268,26 +297,150 @@ namespace ArticWebServer.Server
         // Početna stranica servera
         private void SendHomeResponse(HttpListenerContext context)
         {
-            string html = @"<!DOCTYPE html>
+            string html = BuildHomeHtml("Web Server (klasicne niti + Monitor)");
+            SendHtmlResponse(context, 200, html);
+        }
+        private string BuildHomeHtml(string subtitle)
+        {
+            return $@"<!DOCTYPE html>
 <html><head><meta charset='utf-8'><title>ARTIC Web Server</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:0;background:#f5f5f5;color:#222;}}
+.wrap{{max-width:820px;margin:0 auto;padding:30px 20px 60px;}}
+h1{{color:#8B0000;margin-bottom:4px;}}
+.sub{{color:#777;margin-top:0;font-style:italic;}}
+h2{{color:#8B0000;margin-top:34px;border-bottom:2px solid #eee;padding-bottom:6px;}}
+.card{{background:white;padding:16px 20px;margin:12px 0;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.08);}}
+a{{color:#8B0000;text-decoration:none;}}
+a:hover{{text-decoration:underline;}}
+code{{background:#eee;padding:2px 6px;border-radius:4px;font-size:14px;}}
+table{{border-collapse:collapse;width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 2px 4px rgba(0,0,0,0.08);}}
+th,td{{text-align:left;padding:10px 14px;border-bottom:1px solid #eee;font-size:14px;vertical-align:top;}}
+th{{background:#8B0000;color:white;}}
+.ex{{display:block;margin:6px 0;}}
+.note{{background:#fff8e6;border-left:4px solid #e0a800;padding:10px 14px;border-radius:4px;font-size:14px;}}
+.btn{{display:inline-block;background:#8B0000;color:white;padding:10px 18px;border-radius:8px;margin-top:6px;}}
+ul{{font-size:14px;}} li{{margin:4px 0;}}
+</style></head><body><div class='wrap'>
+
+<h1>Art Institute of Chicago - Web Server</h1>
+<p class='sub'>{subtitle}</p>
+
+<div class='card'>
+Ovaj server pretrazuje kolekciju umetnickih dela muzeja
+<b>Art Institute of Chicago</b> preko njihovog javnog API-ja. Posaljes pojam za
+pretragu, a server vrati listu dela koja mu odgovaraju, formatiranu kao web stranica.
+Svi zahtevi se salju <b>GET</b> metodom.
+</div>
+
+<h2>Kako se pretražuje</h2>
+<div class='card'>
+Osnovni oblik poziva je:
+<p><code>http://localhost:8080/search?q=POJAM</code></p>
+Gde je <code>POJAM</code> ono što tražite (npr. <code>cats</code>, <code>monet</code>,
+<code>samurai</code>). Može se pretražiti <b>bilo šta</b>. Primeri iznad su samo predlozi.
+Razmak u pojmu se pise kao <code>+</code> (npr. <code>q=claude+monet</code>).
+</div>
+
+<h2>Parametri</h2>
+<table>
+<tr><th>Parametar</th><th>Obavezan?</th><th>Sta radi</th></tr>
+<tr><td><code>q</code></td><td>Da</td>
+    <td>Pojam za pretragu. Bez njega server vraća gresku 400.</td></tr>
+<tr><td><code>author</code></td><td>Ne</td>
+    <td>Ako stavite <code>author=true</code>, pretraga ide po <b>autoru</b> (imenu umetnika).
+        Bez njega je podrazumevana <b>full-text</b> pretraga (trazi pojam svuda - naslov, opis, autor...).</td></tr>
+<tr><td><code>limit</code></td><td>Ne</td>
+    <td>Koliko rezultata vratiti (1-100). Podrazumevano <b>10</b>. Npr. <code>limit=25</code>.</td></tr>
+<tr><td><code>delay</code></td><td>Ne</td>
+    <td>Vestacko kasnjenje u milisekundama, <b>samo za demonstraciju</b>.
+        U običnoj pretrazi se ne koristi.</td></tr>
+</table>
+
+<h2>Primeri (klikabilni)</h2>
+<div class='card'>
+<a class='ex' href='/search?q=cats'>&#9656; Full-text: <code>/search?q=cats</code></a>
+<a class='ex' href='/search?q=monet'>&#9656; Full-text: <code>/search?q=monet</code></a>
+<a class='ex' href='/search?q=claude+monet&author=true'>&#9656; Po autoru: <code>/search?q=claude+monet&author=true</code></a>
+<a class='ex' href='/search?q=picasso&author=true'>&#9656; Po autoru: <code>/search?q=picasso&author=true</code></a>
+<a class='ex' href='/search?q=japanese+print&limit=20'>&#9656; Sa limitom: <code>/search?q=japanese+print&limit=20</code></a>
+<a class='ex' href='/search?q=qwertzuiop123'>&#9656; Bez rezultata (greska 404): <code>/search?q=qwertzuiop123</code></a>
+</div>
+
+<div class='note'>
+<b>Šta ako dela ne postoje?</b> Ako za Vaš pojam nema rezultata, server vraca
+poruku o gresci (404). Neće pasti niti se zaglaviti. 
+</div>
+
+<h2>Test: zastita od cache stampede</h2>
+<div class='card'>
+Posebna stranica koja šalje vise istovremenih zahteva za isti pojam i pokazuje da
+server tada ode na API <b>samo jednom</b>, dok ostali sačekaju isti rezultat.
+<br><a class='btn' href='/stamp-test'>Otvori stampede test &rarr;</a>
+</div>
+
+
+
+</div></body></html>";
+        }
+
+
+        // Test stranica za demonstraciju cache stampede zaštite (sinhroni projekat).
+        // Ispaljuje N paralelnih zahteva za ISTI pojam i prikazuje rezime.
+        // Dokaz "obrada izvršena jednom" se čita iz KONZOLE servera (1x MISS, ostalo WAIT pa HIT).
+        private void SendStampTestPage(HttpListenerContext context)
+        {
+            string html = @"<!DOCTYPE html>
+<html><head><meta charset='utf-8'><title>Cache Stampede Test</title>
 <style>
 body{font-family:Arial,sans-serif;margin:40px;background:#f5f5f5;}
 h1{color:#8B0000;}
-.example{background:white;padding:15px;margin:8px 0;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}
-a{color:#8B0000;}
+button{background:#8B0000;color:white;border:none;padding:12px 20px;border-radius:8px;font-size:16px;cursor:pointer;}
+button:disabled{background:#999;cursor:not-allowed;}
+.box{background:white;padding:20px;margin:15px 0;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}
+.ok{color:#0a7d28;font-weight:bold;}
+.row{margin:6px 0;}
+input{padding:8px;font-size:15px;}
+code{background:#eee;padding:2px 6px;border-radius:4px;}
 </style></head><body>
-<h1>Art Institute of Chicago - Web Server</h1>
-<p>Koristite <b>/search</b> endpoint za pretragu umetničkih dela.</p>
-<h3>Primeri pretrage:</h3>
-<div class='example'><a href='/search?q=cats'>Full-text pretraga: /search?q=cats</a></div>
-<div class='example'><a href='/search?q=monet'>Full-text pretraga: /search?q=monet</a></div>
-<div class='example'><a href='/search?q=claude+monet&author=true'>Pretraga po autoru: /search?q=claude+monet&author=true</a></div>
-<div class='example'><a href='/search?q=picasso&author=true'>Pretraga po autoru: /search?q=picasso&author=true</a></div>
-<h3>Parametri:</h3>
-<ul>
-<li><b>q</b> - tekst za pretragu (obavezan)</li>
-<li><b>author=true</b> - pretraga po autoru (opciono, podrazumevano je full-text)</li>
-</ul>
+<h1>Cache Stampede - test (sinhroni projekat)</h1>
+<div class='box'>
+  <div class='row'>Pojam za pretragu:
+    <input type='text' id='term' value='monet' style='width:200px'></div>
+  <div class='row'>Broj istovremenih zahteva:
+    <input type='number' id='count' value='6' min='2' max='50' style='width:80px'></div>
+  <div class='row'><button id='btn' onclick='runTest()'>Pokreni test</button></div>
+</div>
+<div class='box' id='result'>Klikni dugme da pokrenes test.</div>
+<script>
+function runTest() {
+  var btn = document.getElementById('btn');
+  var res = document.getElementById('result');
+  var n = parseInt(document.getElementById('count').value) || 6;
+  var q = (document.getElementById('term').value || 'monet').trim();
+  btn.disabled = true;
+  res.innerHTML = 'Saljem ' + n + ' istovremenih zahteva za pojam <code>' + q + '</code> ...';
+
+  var t0 = performance.now();
+  var calls = [];
+  for (var i = 0; i < n; i++) {
+    calls.push(fetch('/search?q=' + encodeURIComponent(q) + '&_n=' + i + '&delay=3000', { cache: 'no-store' })
+      .then(function(r){ return r.status; }));
+  }
+  Promise.all(calls).then(function(statuses){
+    var t1 = performance.now();
+    var ok = statuses.filter(function(s){ return s === 200; }).length;
+    var sec = ((t1 - t0) / 1000).toFixed(2);
+    res.innerHTML =
+      '<div class=""row"">Pojam: <code>' + q + '</code></div>' +
+      '<div class=""row"">Poslato istovremeno: <b>' + n + '</b> zahteva</div>' +
+      '<div class=""row"">Vreme: <b>' + sec + ' s</b></div>' +
+      '<div class=""row ok"">' + ok + '/' + n + ' zahteva vratilo status 200</div>' +
+      '<div class=""row"">&rarr; Pogledaj konzolu servera: <b>1x MISS</b>, ostalo <b>WAIT</b> pa <b>HIT</b>.</div>';
+    btn.disabled = false;
+  });
+}
+</script>
 </body></html>";
             SendHtmlResponse(context, 200, html);
         }
