@@ -1,4 +1,6 @@
-﻿bin/
+# Fajlovi koje Visual Studio sam pravi - ne idu na GitHub
+bin/
 obj/
 .vs/
 *.user
+*.suo

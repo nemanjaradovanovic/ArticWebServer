@@ -1,39 +1,45 @@
-﻿using ArticWebServer.Server;
-using ArticWebServer.Utils;
+﻿using System;
+using System.Net.Http;
+using ArtworkSearchServer.Logging;
+using ArtworkSearchServer.Server;
+using ArtworkSearchServer.Services;
 
-namespace ArticWebServer
+namespace ArtworkSearchServer
 {
-    internal class Program
+    public class Program
     {
-        static void Main(string[] args)
+        private const int Port = 8080;
+        private const int WorkerCount = 8;                                     
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);  
+
+        
+        private const int ApiDelayMs = 0;
+
+        
+        private static readonly HttpClient httpClient = new HttpClient();
+
+        public static void Main(string[] args)
         {
-            // Konfiguracija servera
-            string prefix = "http://localhost:8080/";
-            int maxWorkers = 4;       // Maksimalan broj paralelnih obrada
-            int cacheTtlSeconds = 60; // Vreme važenja kes unosa u sekundama
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "ArtworkSearchServer/1.0");
 
-            Logger.Log("=== Art Institute of Chicago Web Server ===");
-            Logger.Log($"Konfiguracija: maxWorkers={maxWorkers}, cacheTTL={cacheTtlSeconds}s");
+            Logger logger = new Logger();
+            TtlCache cache = new TtlCache(CacheTtl, logger);
+            ArtworkService artworkService = new ArtworkService(httpClient, logger, ApiDelayMs);
+            HttpServer server = new HttpServer(Port, WorkerCount, cache, artworkService, logger);
 
-            HttpServer server = new HttpServer(prefix, maxWorkers, cacheTtlSeconds);
+            server.Start();
 
-            // Hvatamo Ctrl+C za čisto gašenje
-            Console.CancelKeyPress += (sender, e) =>
-            {
-                e.Cancel = true;
-                Logger.Log("Primljen signal za gašenje...");
-                server.Stop();
-            };
+            Console.WriteLine();
+            Console.WriteLine("=================================================");
+            Console.WriteLine($"  Server radi na: http://localhost:{Port}/");
+            Console.WriteLine($"  Radnickih niti: {WorkerCount} | TTL kesa: {CacheTtl.TotalSeconds}s | Kasnjenje API-ja: {ApiDelayMs}ms");
+            Console.WriteLine("  Pritisni ENTER za gasenje servera.");
+            Console.WriteLine("=================================================");
+            Console.WriteLine();
 
-            try
-            {
-                server.Start(); // Blokira dok server radi
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"Greška pri pokretanju servera: {ex.Message}");
-                Logger.LogError("Napomena: Pokrenite Visual Studio kao Administrator ili proverite da li je port 8080 slobodan.");
-            }
+            Console.ReadLine();
+
+            server.Stop();
         }
     }
 }
